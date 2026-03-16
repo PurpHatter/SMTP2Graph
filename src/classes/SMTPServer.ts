@@ -60,6 +60,13 @@ export class SMTPServer
         });
     }
 
+    close(): Promise<void>
+    {
+        return new Promise((resolve)=>{
+            this.#server.close(()=>resolve());
+        });
+    }
+
     #onConnect: SMTPServerOptions['onConnect'] = (session, callback)=>
     {
         if(Config.isIpAllowed(session.remoteAddress))
