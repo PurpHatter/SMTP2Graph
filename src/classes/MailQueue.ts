@@ -137,19 +137,40 @@ export class MailQueue
         const filename = path.basename(filePath);
         const dest = path.join(this.#queuePath, filename);
 
+        // Exponential backoff delays (ms) for EPERM retries
+        const backoff = [100, 250, 500, 1000, 2000];
+
         const attempt = (tries = 0) => {
             try {
                 fs.renameSync(filePath, dest);
                 log('verbose', `Moved file "${filename}" to queue`);
             } catch(error: any) {
-                // On Windows the file may still be locked for a brief moment after
-                // the stream closes.  Instead of failing permanently we retry a few
-                // times with a small backoff.
-                if(error.code === 'EPERM' && process.platform === 'win32' && tries < 5) {
+                if(error.code === 'ENOENT') {
+                    // Source file is missing — on Windows a rename can move the file
+                    // but still throw EPERM, so a subsequent retry sees ENOENT.
+                    // Check whether the file already landed at the destination.
+                    if(fs.existsSync(dest)) {
+                        log('verbose', `File "${filename}" already arrived in queue (rename threw but dest exists)`);
+                    } else {
+                        log('error', `File "${filename}" disappeared before it could be queued`, {error, filename});
+                    }
+                    return;
+                }
+
+                if(error.code === 'EPERM' && tries < backoff.length) {
                     log('warn', `EPERM renaming "${filename}", retrying`, {tries});
-                    setTimeout(() => attempt(tries + 1), 100);
+                    setTimeout(() => attempt(tries + 1), backoff[tries]);
                 } else {
-                    log('error', `Error while moving "${filename}" to queue`, {error, filename});
+                    // All retries exhausted — move to failed/ so the file is not silently lost
+                    log('error', `Error while moving "${filename}" to queue after ${tries} retries`, {error, filename});
+                    try {
+                        if(fs.existsSync(filePath))
+                            fs.renameSync(filePath, path.join(this.#failedPath, filename));
+                        else
+                            log('error', `File "${filename}" could not be moved to failed — source no longer exists`, {filename});
+                    } catch(moveError) {
+                        log('error', `Failed to move "${filename}" to failed dir`, {error: moveError, filename});
+                    }
                 }
             }
         };
