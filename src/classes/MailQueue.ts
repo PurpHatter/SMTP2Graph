@@ -23,6 +23,8 @@ export class MailQueue
     #retryQueueInterval: NodeJS.Timeout|undefined;
     /** Prevent multiple retries from running simultaneous */
     #retryMutex = new Mutex();
+    /** Track filenames currently being sent to prevent duplicate sends */
+    #inFlight = new Set<string>();
 
     /**
      * Create a mail queue
@@ -58,8 +60,19 @@ export class MailQueue
     async #onFileAdded(filePath: string)
     {
         const filename = path.basename(filePath);
+
+        // Guard against duplicate processing — chokidar can fire a second add event
+        // for the same file if a Windows EPERM rename silently moved it while the
+        // retry timer was still pending.
+        if(this.#inFlight.has(filename))
+        {
+            log('verbose', `File "${filename}" is already being processed, skipping duplicate trigger`);
+            return;
+        }
+
+        this.#inFlight.add(filename);
         log('verbose', `File "${filename}" appeared in the queue`);
-        
+
         try {
             await Mailer.sendEml(filePath);
             this.remove(filePath);
@@ -68,6 +81,8 @@ export class MailQueue
             log('error', `Failed to send message "${filename}"`, {error, filename});
             if(!(error instanceof UnrecoverableError))
                 this.#addToRetryQueue(filename);
+        } finally {
+            this.#inFlight.delete(filename);
         }
     }
 
@@ -147,13 +162,20 @@ export class MailQueue
             } catch(error: any) {
                 if(error.code === 'ENOENT') {
                     // Source file is missing — on Windows a rename can move the file
-                    // but still throw EPERM, so a subsequent retry sees ENOENT.
-                    // Check whether the file already landed at the destination.
-                    if(fs.existsSync(dest)) {
-                        log('verbose', `File "${filename}" already arrived in queue (rename threw but dest exists)`);
-                    } else {
-                        log('error', `File "${filename}" disappeared before it could be queued`, {error, filename});
-                    }
+                    // but still throw EPERM, so a subsequent retry sees ENOENT on source.
+                    // Use statSync (not existsSync) to avoid a TOCTOU window and check
+                    // all possible locations the file could have landed.
+                    let inQueue = false;
+                    let inFailed = false;
+                    try { fs.statSync(dest); inQueue = true; } catch {}
+                    try { fs.statSync(path.join(this.#failedPath, filename)); inFailed = true; } catch {}
+
+                    if(inQueue)
+                        log('verbose', `File "${filename}" already arrived in queue (rename reported ENOENT but dest exists)`);
+                    else if(inFailed)
+                        log('warn', `File "${filename}" found in failed dir — was it moved by a previous run?`, {filename});
+                    else
+                        log('error', `File "${filename}" disappeared before it could be queued — not found in queue or failed`, {error, filename});
                     return;
                 }
 
@@ -163,13 +185,19 @@ export class MailQueue
                 } else {
                     // All retries exhausted — move to failed/ so the file is not silently lost
                     log('error', `Error while moving "${filename}" to queue after ${tries} retries`, {error, filename});
-                    try {
-                        if(fs.existsSync(filePath))
+                    let sourceExists = false;
+                    try { fs.statSync(filePath); sourceExists = true; } catch {}
+                    if(sourceExists) {
+                        try {
                             fs.renameSync(filePath, path.join(this.#failedPath, filename));
-                        else
-                            log('error', `File "${filename}" could not be moved to failed — source no longer exists`, {filename});
-                    } catch(moveError) {
-                        log('error', `Failed to move "${filename}" to failed dir`, {error: moveError, filename});
+                            log('warn', `Moved "${filename}" to failed after exhausting rename retries`, {filename});
+                        } catch(moveError) {
+                            log('error', `Failed to move "${filename}" to failed dir`, {error: moveError, filename});
+                            // Last resort: delete the temp file so it does not block future emails
+                            try { fs.unlinkSync(filePath); } catch {}
+                        }
+                    } else {
+                        log('error', `File "${filename}" could not be moved to failed — source no longer exists`, {filename});
                     }
                 }
             }
@@ -185,6 +213,14 @@ export class MailQueue
         } catch(error) {
             log('error', `Error while deleting "${filePath}" from queue`, {error});
         }
+    }
+
+    async close(): Promise<void>
+    {
+        clearInterval(this.#retryQueueInterval);
+        this.#retryQueueInterval = undefined;
+        if(this.#watcher)
+            await this.#watcher.close();
     }
 
     #ensureFolderStructure()
