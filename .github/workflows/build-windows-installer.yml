@@ -30,7 +30,7 @@ jobs:
       - name: Read package.json
         id: manifest
         shell: bash
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version.split('.').concat([0,0,0]).slice(0,4).join('.')")" >> $GITHUB_OUTPUT
 
       - name: Get WiX
         run: |
