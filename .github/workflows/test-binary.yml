@@ -31,6 +31,8 @@ on:
 jobs:
   test:
     runs-on: ${{ inputs.platform }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
