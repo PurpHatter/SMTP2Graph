@@ -24,7 +24,7 @@
             <RemoveFile Id="PurgeInstallFolder" Name="*.*" On="uninstall" />
           </Component>
           <!-- Our main application -->
-          <Component Id="Server" Win64="yes">
+          <Component Id="Server" Win64="yes" Guid="*">
             <File KeyPath="yes" Source="dist/smtp2graph-win-x64.exe" Id="smtp2graph_win_x64" />
           </Component>
           <!-- shawl to run our application as a service -->

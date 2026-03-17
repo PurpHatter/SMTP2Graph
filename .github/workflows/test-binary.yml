@@ -67,7 +67,7 @@ jobs:
         run: npm run test:receive -- --serverFile=dist/${{ inputs.binaryName }} --reporter json --reporter-option output=test-results.json
 
       - name: Test report
-        uses: phoenix-actions/test-reporting@v12
+        uses: phoenix-actions/test-reporting@v15
         if: success() || failure()
         with:
           name: Test result ${{ inputs.binaryName }}
