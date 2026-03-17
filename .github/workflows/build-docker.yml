@@ -18,16 +18,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup NodeJS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20.x'
 
       - name: Download package.json
         if: ${{ inputs.fetchPackageJson }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: package-json
 
@@ -39,9 +39,7 @@ jobs:
 
       - name: Read package.json
         id: manifest
-        uses: zoexx/github-action-json-file-properties@1.0.4
-        with:
-          file_path: package.json
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
