@@ -25,20 +25,9 @@ else
             process.exit(1);
         }
 
-        // Graceful shutdown — stop accepting connections, close the queue watcher,
-        // then exit. Any files already in queue/ will be reprocessed on next start.
-        let isShuttingDown = false;
-        const shutdown = async () =>
-        {
-            if(isShuttingDown) return;
-            isShuttingDown = true;
-            await log('info', 'Shutting down gracefully...');
-            await server.close();
-            await queue.close();
-            process.exit(0);
-        };
-
-        process.on('SIGINT', shutdown);
-        process.on('SIGTERM', shutdown);
+        // Exit cleanly on SIGINT/SIGTERM. The queue is file-based so any items
+        // already in queue/ will be reprocessed on next start.
+        process.on('SIGINT', () => process.exit(0));
+        process.on('SIGTERM', () => process.exit(0));
     })();
 }
