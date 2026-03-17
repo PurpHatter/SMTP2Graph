@@ -197,7 +197,7 @@ export class MailQueue
                             try { fs.unlinkSync(filePath); } catch {}
                         }
                     } else {
-                        log('error', `File "${filename}" could not be moved to failed — source no longer exists`, {filename});
+                        log('error', `File "${filename}" could not be moved to failed — source no longer exists`, {filename, error: undefined});
                     }
                 }
             }
