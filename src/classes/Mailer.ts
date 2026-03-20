@@ -19,6 +19,9 @@ export class Mailer
     static #aquireTokenMutex = new Mutex();
     /** Prevent sending more than 4 messages in parallel (see: https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits) */
     static #sendSemaphore = new Semaphore(4);
+    /** Cached access token and its expiry timestamp (ms) */
+    static #cachedAccessToken: string | undefined;
+    static #tokenExpiresAt = 0;
 
     static #msalClient = (Config.clientId && (Config.clientSecret || (Config.clientCertificateThumbprint && Config.clientCertificateKeyPath)))?new ConfidentialClientApplication({
         auth: {
@@ -48,19 +51,23 @@ export class Mailer
             // Fetch an accesstoken if needed
             const token = await this.#aquireToken();
 
-            // Send the message
-            const readStream = fs.createReadStream(filePath);
+            // Send the message — factory is called on each attempt so every retry gets a fresh stream
+            let readStream: fs.ReadStream | undefined;
             try {
-                await this.#retryableRequest({
-                    method: 'post',
-                    url: `https://graph.microsoft.com/v1.0/users/${sender}/sendMail`,
-                    data: readStream.pipe(new Base64Encode()),
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'text/plain',
-                        'User-Agent': `SMPT2Graph/${VERSION}`,
-                    },
-                    proxy: Config.httpProxyConfig,
+                await this.#retryableRequest(() => {
+                    readStream?.destroy(); // Close the previous attempt's file descriptor before opening a new one
+                    readStream = fs.createReadStream(filePath);
+                    return {
+                        method: 'post',
+                        url: `https://graph.microsoft.com/v1.0/users/${sender}/sendMail`,
+                        data: readStream.pipe(new Base64Encode()),
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            'Content-Type': 'text/plain',
+                            'User-Agent': `SMPT2Graph/${VERSION}`,
+                        },
+                        proxy: Config.httpProxyConfig,
+                    };
                 });
             } catch(error: any) {
                 if(isAxiosError(error) && error.response?.data)
@@ -83,13 +90,13 @@ export class Mailer
                 else
                     throw error;
             } finally {
-                readStream.destroy();
+                readStream?.destroy();
             }
         });
     }
 
     /** Automatically retry a request when it's being throttled by the Graph API */
-    static async #retryableRequest<RequestData = any, ReponseData = any>(request: AxiosRequestConfig<RequestData>): Promise<AxiosResponse<RequestData, ReponseData>>
+    static async #retryableRequest<RequestData = any, ReponseData = any>(requestFactory: () => AxiosRequestConfig<RequestData>): Promise<AxiosResponse<RequestData, ReponseData>>
     {
         const retryLimit = 3;
         let retryCount = 0;
@@ -97,6 +104,7 @@ export class Mailer
 
         const retry = async (): Promise<AxiosResponse<RequestData, ReponseData>> =>
         {
+            const request = requestFactory(); // Fresh request (and fresh stream) on every attempt
             const abortController = new AbortController();
             const connectTimeout = setTimeout(()=>abortController.abort(`Server did not respond within 10 seconds`), 10000);
             const overallTimeout = setTimeout(()=>abortController.abort(`Failed to send message within 120 seconds`), 120000);
@@ -105,7 +113,7 @@ export class Mailer
                 return await axios({
                     ...request,
                     signal: abortController.signal,
-                    onUploadProgress: progress=>{
+                    onUploadProgress: ()=>{
                         clearTimeout(connectTimeout);
                     },
                 });
@@ -114,7 +122,7 @@ export class Mailer
                     throw error;
                 else if(isAxiosError(error) && (error.response?.status === 429 || error.response?.status === 503 || error.response?.status === 504)) // We got a retryable response?
                 {
-                    const retryAfter = error.response.headers['Retry-After'];
+                    const retryAfter = error.response.headers['retry-after']; // Axios lowercases all response headers
                     if(retryAfter && !isNaN(retryAfter)) // We got throttled
                         wait = parseInt(retryAfter) * 1000;
                     else
@@ -171,13 +179,28 @@ export class Mailer
 
     static async #aquireToken(): Promise<string>
     {
+        // Fast path: return our own cached token without taking the mutex
+        if(this.#cachedAccessToken && Date.now() < this.#tokenExpiresAt)
+            return this.#cachedAccessToken;
+
         return this.#aquireTokenMutex.runExclusive(async ()=>{
+            // Re-check inside the mutex in case another caller already refreshed it
+            if(this.#cachedAccessToken && Date.now() < this.#tokenExpiresAt)
+                return this.#cachedAccessToken;
+
             if(!this.#msalClient) throw new UnrecoverableError('Trying to login without an application registration');
 
             const res = await this.#msalClient.acquireTokenByClientCredential({
                 scopes: ['https://graph.microsoft.com/.default'],
             });
-            return res?.accessToken!;
+
+            if(!res?.accessToken) throw new Error('Failed to acquire access token');
+            this.#cachedAccessToken = res.accessToken;
+            // Cache the token until 60 s before it actually expires to avoid using a near-expired token
+            this.#tokenExpiresAt = res.expiresOn
+                ? res.expiresOn.getTime() - 60_000
+                : Date.now() + 3_300_000; // 55-minute fallback
+            return this.#cachedAccessToken;
         });
     }
 

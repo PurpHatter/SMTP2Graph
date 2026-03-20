@@ -139,11 +139,12 @@ export class MailQueue
         if(this.#retryMutex.isLocked()) return; // Skip if it's already retrying
 
         await this.#retryMutex.runExclusive(async ()=>{
-            for(const [filename,data] of this.#retryQueue)
-            {
-                if(data.retryAfter.getTime() < Date.now()) // This item should be retried?
-                    await this.#onFileAdded(path.join(this.#queuePath, filename));
-            }
+            // Kick off all eligible retries in parallel — Mailer's semaphore enforces the Graph API concurrency limit
+            const retries = [...this.#retryQueue.entries()]
+                .filter(([, data]) => data.retryAfter.getTime() < Date.now())
+                .map(([filename]) => this.#onFileAdded(path.join(this.#queuePath, filename)));
+
+            await Promise.all(retries);
         });
     }
 

@@ -123,7 +123,7 @@ export class Config
             throw new InvalidConfig(`Property "receive.rateLimit.limit" should be a number`);
         else if(this.smtpAuthLimitDuration && typeof this.smtpAuthLimitDuration !== 'number')
             throw new InvalidConfig(`Property "receive.authLimit.duration" should be a number`);
-        else if(this.smtpAuthLimitDuration && typeof this.smtpAuthLimitDuration !== 'number')
+        else if(this.smtpAuthLimitLimit && typeof this.smtpAuthLimitLimit !== 'number')
             throw new InvalidConfig(`Property "receive.authLimit.limit" should be a number`);
         else if(this.#config.httpProxy && typeof this.#config.httpProxy.host !== 'string')
             throw new InvalidConfig(`Property "httpProxy.host" should be a string`);
@@ -316,7 +316,7 @@ export class Config
 
     static get httpProxyPassword()
     {
-        return this.#config.httpProxy?.username;
+        return this.#config.httpProxy?.password;
     }
 
     static get httpProxyConfig(): AxiosProxyConfig | undefined
