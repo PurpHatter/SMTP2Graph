@@ -1,6 +1,7 @@
 import { INetworkModule, NetworkRequestOptions, NetworkResponse } from "@azure/msal-node";
 import axios, { AxiosRequestConfig } from "axios";
 import { Config } from "./Config";
+import { msalAgent } from "./HttpAgents";
 
 export class MsalProxy implements INetworkModule
 {
@@ -22,6 +23,7 @@ export class MsalProxy implements INetworkModule
             headers: options.headers,
             data: options.body,
             proxy: Config.httpProxyConfig,
+            httpsAgent: msalAgent,
         };
 
         const response = await axios(requestConfig);

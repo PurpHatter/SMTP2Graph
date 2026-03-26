@@ -8,6 +8,10 @@ import { ConfidentialClientApplication } from '@azure/msal-node';
 import { Config } from './Config';
 import { UnrecoverableError } from './Constants';
 import { MsalProxy } from './MsalProxy';
+import { graphAgent } from './HttpAgents';
+
+/** Network-level error codes that are transient and safe to retry immediately with backoff */
+const RETRYABLE_NETWORK_CODES = new Set(['EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND']);
 
 export class MailboxAccessDenied extends UnrecoverableError { }
 export class InvalidMailContent extends UnrecoverableError { }
@@ -112,6 +116,7 @@ export class Mailer
             try {
                 return await axios({
                     ...request,
+                    httpsAgent: graphAgent,
                     signal: abortController.signal,
                     onUploadProgress: ()=>{
                         clearTimeout(connectTimeout);
@@ -130,6 +135,12 @@ export class Mailer
 
                     await this.#sleep(wait);
 
+                    return retry();
+                }
+                else if(isAxiosError(error) && !error.response && error.code && RETRYABLE_NETWORK_CODES.has(error.code)) // Transient network error?
+                {
+                    wait *= 2;
+                    await this.#sleep(wait);
                     return retry();
                 }
                 else if(axios.isCancel(error) && abortController.signal.aborted)
