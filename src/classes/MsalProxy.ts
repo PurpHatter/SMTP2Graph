@@ -22,7 +22,7 @@ export class MsalProxy implements INetworkModule
             method: method,
             headers: options.headers,
             data: options.body,
-            proxy: Config.httpProxyConfig,
+            proxy: Config.httpProxyConfig ?? false,
             httpsAgent: msalAgent,
         };
 

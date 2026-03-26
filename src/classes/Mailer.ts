@@ -70,7 +70,7 @@ export class Mailer
                             'Content-Type': 'text/plain',
                             'User-Agent': `SMPT2Graph/${VERSION}`,
                         },
-                        proxy: Config.httpProxyConfig,
+                        proxy: Config.httpProxyConfig ?? false,
                     };
                 });
             } catch(error: any) {
